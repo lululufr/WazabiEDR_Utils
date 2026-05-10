@@ -53,6 +53,8 @@ fn main() -> ExitCode {
         "path" => cmd_path(&args[1..]),
         "revoke" => cmd_set_revoked(&args[1..], true),
         "unrevoke" => cmd_set_revoked(&args[1..], false),
+        "auto-launch" => cmd_set_auto_launch(&args[1..], true),
+        "no-auto-launch" => cmd_set_auto_launch(&args[1..], false),
         "remove" => cmd_remove(&args[1..]),
         "-h" | "--help" | "help" => {
             print_usage();
@@ -76,14 +78,18 @@ fn print_usage() {
          \n\
          USAGE:\n  \
            wedr-plugin enroll <BINARY> --name <NAME> --vendor <VENDOR> \\\n  \
-                              [--signer \"CN=...\"] [--allow-unsigned] [--out-dir <DIR>]\n  \
-           wedr-plugin update <PLUGIN_ID> [<BINARY>]      [--dir <DIR>]\n  \
+                              [--signer \"CN=...\"] [--allow-unsigned] \\\n  \
+                              [--auto-launch] [--out-dir <DIR>]\n  \
+           wedr-plugin update <PLUGIN_ID> [<BINARY>] \\\n  \
+                              [--auto-launch | --no-auto-launch] [--dir <DIR>]\n  \
            wedr-plugin list                               [--dir <DIR>]\n  \
            wedr-plugin show <PLUGIN_ID>                   [--dir <DIR>]\n  \
            wedr-plugin doctor                             [--dir <DIR>]\n  \
            wedr-plugin path                               [--dir <DIR>]\n  \
            wedr-plugin revoke <PLUGIN_ID>                 [--dir <DIR>]\n  \
            wedr-plugin unrevoke <PLUGIN_ID>               [--dir <DIR>]\n  \
+           wedr-plugin auto-launch <PLUGIN_ID>            [--dir <DIR>]\n  \
+           wedr-plugin no-auto-launch <PLUGIN_ID>         [--dir <DIR>]\n  \
            wedr-plugin remove <PLUGIN_ID>                 [--dir <DIR>]\n  \
          \n\
          The default manifest directory is %ProgramData%\\WazabiEDR\\plugins.\n\
@@ -99,6 +105,10 @@ fn print_usage() {
                                   Example: \"CN=Acme Corp, O=Acme, C=FR\"\n  \
            --allow-unsigned       Skip signer requirement; integrity is\n  \
                                   enforced via SHA-256 only. Use for dev.\n  \
+           --auto-launch          Have the agent's supervisor spawn this\n  \
+                                  plugin at startup and restart it on\n  \
+                                  crash (exponential backoff, cap 60 s).\n  \
+                                  Default: off — operators opt in.\n  \
            --out-dir <DIR>        Override the manifest output directory.\n\
          \n\
          update <PLUGIN_ID> [<BINARY>]:\n  \
@@ -106,7 +116,16 @@ fn print_usage() {
            Without <BINARY>, re-hashes whatever is at the manifest's\n  \
            expected_path. With <BINARY>, also updates expected_path.\n  \
            Use after rebuilding a plugin so an SHA-pinned manifest stops\n  \
-           rejecting the new build.\n\
+           rejecting the new build.\n  \
+           --auto-launch / --no-auto-launch toggle the supervisor flag\n  \
+           without rebuilding the binary.\n\
+         \n\
+         auto-launch / no-auto-launch <PLUGIN_ID>:\n  \
+           Toggle the supervisor's auto_launch flag on a single plugin.\n  \
+           When auto_launch is on, the agent spawns this plugin at\n  \
+           startup and restarts it on crash with exponential backoff.\n  \
+           Note: the supervisor reads this at agent startup only —\n  \
+           restart the agent for the change to take effect.\n\
          \n\
          doctor:\n  \
            Walks every enrolled manifest and reports drift:\n  \
@@ -128,6 +147,7 @@ struct EnrollArgs {
     signer: Option<String>,
     allow_unsigned: bool,
     out_dir: Option<PathBuf>,
+    auto_launch: bool,
 }
 
 fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
@@ -137,6 +157,7 @@ fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
     let mut signer: Option<String> = None;
     let mut allow_unsigned = false;
     let mut out_dir: Option<PathBuf> = None;
+    let mut auto_launch = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -157,6 +178,10 @@ fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
             "--out-dir" => {
                 out_dir = Some(PathBuf::from(next_value(args, &mut i, "--out-dir")?));
             }
+            "--auto-launch" => {
+                auto_launch = true;
+                i += 1;
+            }
             other if !other.starts_with("--") && binary.is_none() => {
                 binary = Some(PathBuf::from(other));
                 i += 1;
@@ -172,6 +197,7 @@ fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
         signer,
         allow_unsigned,
         out_dir,
+        auto_launch,
     })
 }
 
@@ -214,6 +240,7 @@ fn cmd_enroll(args: &[String]) -> Result<(), String> {
         expected_signer: opts.signer.clone(),
         revoked: false,
         enrolled_at: Some(now),
+        auto_launch: opts.auto_launch,
     };
 
     let dir = opts.out_dir.unwrap_or_else(default_dir);
@@ -240,6 +267,7 @@ fn cmd_enroll(args: &[String]) -> Result<(), String> {
     println!("  name          : {}", manifest.name);
     println!("  vendor        : {}", manifest.vendor);
     println!("  expected_path : {}", manifest.expected_path);
+    println!("  auto_launch   : {}", manifest.auto_launch);
     println!("  manifest      : {}", out.display());
     if opts.allow_unsigned {
         println!(
@@ -262,16 +290,30 @@ fn cmd_enroll(args: &[String]) -> Result<(), String> {
 // =====================================================================
 
 fn cmd_update(args: &[String]) -> Result<(), String> {
-    // `wedr-plugin update <PLUGIN_ID>            [--dir <DIR>]`
-    // `wedr-plugin update <PLUGIN_ID> <BINARY>   [--dir <DIR>]`
+    // `wedr-plugin update <PLUGIN_ID>            [--dir <DIR>] [--auto-launch | --no-auto-launch]`
+    // `wedr-plugin update <PLUGIN_ID> <BINARY>   [--dir <DIR>] [--auto-launch | --no-auto-launch]`
+    //
+    // Without <BINARY> and without --(no-)auto-launch, this re-hashes
+    // whatever is at the manifest's expected_path. Any combination of
+    // <BINARY> + auto-launch toggle is allowed; either one alone counts
+    // as "something changed" and triggers the write.
     let mut id: Option<String> = None;
     let mut binary: Option<PathBuf> = None;
     let mut dir: Option<PathBuf> = None;
+    let mut new_auto_launch: Option<bool> = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--dir" => dir = Some(PathBuf::from(next_value(args, &mut i, "--dir")?)),
+            "--auto-launch" => {
+                new_auto_launch = Some(true);
+                i += 1;
+            }
+            "--no-auto-launch" => {
+                new_auto_launch = Some(false);
+                i += 1;
+            }
             other if !other.starts_with("--") && id.is_none() => {
                 id = Some(other.to_string());
                 i += 1;
@@ -317,19 +359,39 @@ fn cmd_update(args: &[String]) -> Result<(), String> {
 
     let new_sha = sha256::sha256_file_hex(&target)
         .map_err(|e| format!("cannot hash {:?}: {}", target, e))?;
+    let prev_sha = m.expected_sha256.clone().unwrap_or_default();
+    let sha_changed = prev_sha != new_sha;
 
-    let prev = m.expected_sha256.clone().unwrap_or_default();
-    if prev == new_sha {
+    // Auto-launch toggle: only count as "changed" if the new value
+    // differs from what's already on disk.
+    let prev_auto = m.auto_launch;
+    let auto_changed = match new_auto_launch {
+        Some(v) => v != prev_auto,
+        None => false,
+    };
+
+    if !sha_changed && !auto_changed {
         println!("manifest already up-to-date for {}", id);
         return Ok(());
     }
 
-    m.expected_sha256 = Some(new_sha.clone());
+    if sha_changed {
+        m.expected_sha256 = Some(new_sha.clone());
+    }
+    if let Some(v) = new_auto_launch {
+        m.auto_launch = v;
+    }
+
     let json = serde_json::to_vec_pretty(&m).map_err(|e| format!("serialise: {}", e))?;
     std::fs::write(&path, &json).map_err(|e| format!("write {:?}: {}", path, e))?;
 
     println!("updated manifest for {}", id);
-    println!("  expected_sha256 : {} → {}", prev, new_sha);
+    if sha_changed {
+        println!("  expected_sha256 : {} → {}", prev_sha, new_sha);
+    }
+    if auto_changed {
+        println!("  auto_launch     : {} → {}", prev_auto, m.auto_launch);
+    }
     Ok(())
 }
 
@@ -474,15 +536,16 @@ fn cmd_list(args: &[String]) -> Result<(), String> {
     }
 
     println!(
-        "{:<38} {:<30} {:<8} {}",
-        "plugin_id", "name", "revoked", "vendor"
+        "{:<38} {:<30} {:<8} {:<10} {}",
+        "plugin_id", "name", "revoked", "auto-launch", "vendor"
     );
     for m in entries {
         println!(
-            "{:<38} {:<30} {:<8} {}",
+            "{:<38} {:<30} {:<8} {:<10} {}",
             m.plugin_id,
             truncate(&m.name, 30),
             if m.revoked { "yes" } else { "no" },
+            if m.auto_launch { "yes" } else { "no" },
             m.vendor
         );
     }
@@ -522,6 +585,39 @@ fn cmd_set_revoked(args: &[String], revoke: bool) -> Result<(), String> {
         id
     );
     println!("agent will pick this up automatically within ~5 s (hot-reload)");
+    Ok(())
+}
+
+fn cmd_set_auto_launch(args: &[String], enable: bool) -> Result<(), String> {
+    let (id, dir) = parse_id_and_dir(args)?;
+    let path = dir.join(format!("{}.json", id));
+    let bytes = std::fs::read(&path)
+        .map_err(|e| format!("read {:?}: {}", path, e))?;
+    let mut m: PluginManifest = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("parse {:?}: {}", path, e))?;
+
+    if m.auto_launch == enable {
+        // No-op: writing would just bump mtime and trigger a needless
+        // hot-reload on the agent side. Be explicit so the operator
+        // knows nothing changed.
+        println!(
+            "{} already auto_launch={}",
+            id, m.auto_launch
+        );
+        return Ok(());
+    }
+
+    let prev = m.auto_launch;
+    m.auto_launch = enable;
+    let json = serde_json::to_vec_pretty(&m)
+        .map_err(|e| format!("serialise: {}", e))?;
+    std::fs::write(&path, &json)
+        .map_err(|e| format!("write {:?}: {}", path, e))?;
+    println!("auto_launch {}: {} → {}", id, prev, m.auto_launch);
+    println!(
+        "note: the agent's supervisor reads this at startup only; \
+         restart the agent for the change to take effect."
+    );
     Ok(())
 }
 

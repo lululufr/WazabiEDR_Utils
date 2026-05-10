@@ -24,4 +24,8 @@ pub struct PluginManifest {
     pub revoked: bool,
     #[serde(default)]
     pub enrolled_at: Option<String>,
+    /// Opt-in: when true, the agent's supervisor spawns this plugin at
+    /// startup and restarts it on crash with exponential backoff.
+    #[serde(default)]
+    pub auto_launch: bool,
 }
