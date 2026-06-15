@@ -1,30 +1,33 @@
 # WazabiEDR_Utils
 
-Operator-side tooling for [WazabiEDR](../WazabiEDR_Doc/README.md).
+Outillage opérateur de l'EDR **WazabiEDR**. Livre **un** binaire :
 
-Currently ships **one** binary:
+| Binaire | Rôle |
+|---|---|
+| `wedr-plugin` | enroll / list / show / doctor / update / revoke / auto-launch / remove des plugins |
 
-| binary        | purpose                                              |
-|---------------|------------------------------------------------------|
-| `wedr-plugin` | enrol / list / show / doctor / update / revoke / remove plugins |
+`wedr-plugin` écrit et maintient les **manifests** de plugins sous
+`%ProgramData%\WazabiEDR\plugins\` — la fiche signalétique de chaque plugin autorisé à se
+connecter à l'agent. L'agent **recharge à chaud** ce dossier toutes les 5 s : aucun redémarrage
+n'est nécessaire après une opération.
 
-## Build & quick reference
+## Build & aperçu rapide
 
 ```powershell
 cargo build --release
 .\target\release\wedr-plugin.exe --help
 ```
 
-The default manifest directory is `%ProgramData%\WazabiEDR\plugins\`.
-Writing to it requires Administrator. The agent **hot-reloads** that
-directory every 5 s — no agent restart is needed after any operation.
+Écrire dans le dossier par défaut nécessite les droits Administrateur.
 
 ## Documentation
 
-All documentation lives in **[../WazabiEDR_Doc/](../WazabiEDR_Doc/README.md)**.
-Highlights for `wedr-plugin`:
+Toute la documentation vit désormais **dans ce dépôt** (plus de dépôt `WazabiEDR_Doc`).
 
-- [Managing plugins (operator guide)](../WazabiEDR_Doc/usage/managing-plugins.md) — every subcommand with examples
-- [CLI reference (every flag)](../WazabiEDR_Doc/reference/cli-reference.md)
-- [Enrolment internals](../WazabiEDR_Doc/architecture/enrollment-internals.md) — what `enroll` does step by step
-- [Plugin manifest store](../WazabiEDR_Doc/architecture/plugin-manifest.md) — what these manifests are and how the agent reads them
+- 📐 **[ARCHITECTURE.md](ARCHITECTURE.md)** — manifest, anatomie du CLI, `enroll` étape par étape,
+  crypto sans dépendance, hot-reload côté agent.
+- 🧑‍💻 [doc/usage/managing-plugins.md](doc/usage/managing-plugins.md) — chaque commande avec exemples.
+- 📑 [doc/reference/cli-reference.md](doc/reference/cli-reference.md) — chaque flag.
+
+Voir aussi : [`WazabiEDR_PluginSDK`](../WazabiEDR_PluginSDK/) (écrire un plugin) et
+[`WazabiEDR_Agent`](../WazabiEDR_Agent/) (la vérification d'identité côté agent).
