@@ -28,4 +28,10 @@ pub struct PluginManifest {
     /// startup and restarts it on crash with exponential backoff.
     #[serde(default)]
     pub auto_launch: bool,
+
+    /// Environment variables to apply at plugin spawn. Mirrors the
+    /// `runtime.env` table of the upstream `wedr-plugin.toml`. Populated
+    /// from `--env KEY=VALUE` (repeatable) on `wedr-plugin enroll`.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
 }

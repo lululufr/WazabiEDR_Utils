@@ -148,6 +148,10 @@ struct EnrollArgs {
     allow_unsigned: bool,
     out_dir: Option<PathBuf>,
     auto_launch: bool,
+    /// `--env KEY=VALUE` répétable. Vide par défaut. Sera sérialisé tel
+    /// quel dans `PluginManifest.env` et appliqué par le supervisor agent
+    /// au moment du spawn.
+    env: std::collections::HashMap<String, String>,
 }
 
 fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
@@ -158,6 +162,8 @@ fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
     let mut allow_unsigned = false;
     let mut out_dir: Option<PathBuf> = None;
     let mut auto_launch = false;
+    let mut env: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     let mut i = 0;
     while i < args.len() {
@@ -182,6 +188,18 @@ fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
                 auto_launch = true;
                 i += 1;
             }
+            "--env" => {
+                let kv = next_value(args, &mut i, "--env")?;
+                // KEY=VALUE — VALUE peut contenir des '=' (URL, JSON), donc
+                // on splitn(2) plutôt que split.
+                let (k, v) = kv.split_once('=').ok_or_else(|| {
+                    format!("--env expects KEY=VALUE, got: {kv}")
+                })?;
+                if k.is_empty() {
+                    return Err(format!("--env: empty KEY in {kv}"));
+                }
+                env.insert(k.to_string(), v.to_string());
+            }
             other if !other.starts_with("--") && binary.is_none() => {
                 binary = Some(PathBuf::from(other));
                 i += 1;
@@ -198,6 +216,7 @@ fn parse_enroll(args: &[String]) -> Result<EnrollArgs, String> {
         allow_unsigned,
         out_dir,
         auto_launch,
+        env,
     })
 }
 
@@ -241,6 +260,7 @@ fn cmd_enroll(args: &[String]) -> Result<(), String> {
         revoked: false,
         enrolled_at: Some(now),
         auto_launch: opts.auto_launch,
+        env: opts.env,
     };
 
     let dir = opts.out_dir.unwrap_or_else(default_dir);
