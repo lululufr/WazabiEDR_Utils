@@ -8,6 +8,25 @@
 La plupart des opérations nécessitent une élévation (Administrateur). Pour le détail interne de
 ce que fait `enroll`, voir [`ARCHITECTURE.md`](../../ARCHITECTURE.md) §4.
 
+## Deux flux, un seul écrivain
+
+`wedr-plugin` est invoqué dans **deux cas** :
+
+| Flux | Invocateur | Quand |
+|---|---|---|
+| **Manuel** | l'opérateur (vous) | Smoke-test local, dev, plugin propre à un site sans pipeline GitHub |
+| **Auto** | l'agent WazabiEDR | Après que le serveur lui ait poussé un paquet via le control-plane (cf. [plugin-distribution.md](../../../WazabiEDR_Server/doc/reference/plugin-distribution.md)) |
+
+Dans les deux cas, **le manifest est écrit par `wedr-plugin`** — c'est ce qui garantit que le
+format reste byte-identical et que `doctor`, `list`, `revoke`, `remove` fonctionnent de la même
+façon sur les manifests venus du serveur que sur ceux enrôlés à la main.
+
+> **Conséquence opérateur** : si vous lancez `wedr-plugin remove <plugin_id>` sur un manifest
+> qui vient du serveur, l'agent va le **ré-installer au prochain heartbeat** (le serveur ne sait
+> pas que vous l'avez supprimé manuellement). Pour désassigner durablement un plugin
+> serveur-managed, passer par la console admin (`DELETE /api/v1/admin/plugin-packages/{id}` ou
+> bouton corbeille).
+
 ---
 
 ## Découverte — `path` et `list`
