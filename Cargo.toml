@@ -8,6 +8,13 @@ description = "Operator-side tooling for WazabiEDR (plugin enrolment, …)."
 name = "wedr-plugin"
 path = "src/wedr_plugin/main.rs"
 
+# Headless `.waza` rule checker — used by the server (subprocess) to
+# validate / simulate / introspect rules without duplicating the Rust
+# parser in Python.
+[[bin]]
+name = "wedr-waza-check"
+path = "src/wedr_waza_check/main.rs"
+
 [dependencies]
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -19,6 +26,14 @@ windows-sys = { version = "0.59", features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Pure rule engine (parser, AST, evaluator). Used only by the
+# `wedr-waza-check` binary; `wedr-plugin` doesn't touch it.
+#
+# Dev local — mettre dans `.cargo/config.toml` GITIGNORÉ :
+#   [patch."https://github.com/lululufr/WazabiEDR_WazaCore.git"]
+#   wedr-waza-core = { path = "../WazabiEDR_WazaCore" }
+wedr-waza-core = { git = "https://github.com/lululufr/WazabiEDR_WazaCore.git", tag = "v0.1.0" }
 
 [profile.release]
 lto = "thin"
